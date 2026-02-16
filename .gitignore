@@ -1,0 +1,12 @@
+build/
+backup.env
+.env
+.env.*
+*.dump
+config.json
+node_modules/
+ui/backend/node_modules/
+ui/frontend/node_modules/
+ui/frontend/dist/
+.DS_Store
+*.log

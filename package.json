@@ -1,0 +1,11 @@
+{
+  "name": "backup",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "IKS Backups – run Web UI and backup binary. Use backup.env or .env for POSTGRES_* and BACKUP_UI_PORT.",
+  "scripts": {
+    "build:binary": "sh scripts/build-binary.sh",
+    "start": "npm run build:binary && cd ui/frontend && npm run build && cd ../backend && npm start"
+  }
+}

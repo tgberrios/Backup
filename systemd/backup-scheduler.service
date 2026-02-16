@@ -1,0 +1,42 @@
+# Backup scheduler daemon. Runs "Backup backup schedule" in a loop,
+# executing backups whose cron schedule matches the current time.
+#
+# Install:
+#   sudo cp backup-scheduler.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable backup-scheduler
+#   sudo systemctl start backup-scheduler
+#
+# Prerequisites:
+#   - config.json in WorkingDirectory with database.postgres (or set env)
+#   - PostgreSQL schema: run schema/init_backup_metadata.sql on that DB
+#   - Binary: set ExecStart path to your Backup binary (e.g. /usr/local/bin/Backup)
+
+[Unit]
+Description=Backup scheduler (cron-style backup runner)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Use the path where the Backup binary is installed
+ExecStart=/usr/local/bin/Backup backup schedule
+# Directory that contains config.json (or set POSTGRES_* env below)
+WorkingDirectory=/etc/backup
+# Optional: use a dedicated config file
+# Environment=BACKUP_CONFIG=/etc/backup/config.json
+# Or set Postgres connection via environment
+# Environment=POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_DB=postgres POSTGRES_USER=backup POSTGRES_PASSWORD=secret
+
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=backup-scheduler
+
+# Run as dedicated user (create with: useradd -r -s /bin/false backup)
+# User=backup
+# Group=backup
+
+[Install]
+WantedBy=multi-user.target
