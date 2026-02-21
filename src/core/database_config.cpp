@@ -1,12 +1,7 @@
 #include "core/database_config.h"
-#include "json.hpp"
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <iostream>
-
-using json = nlohmann::json;
 
 std::string DatabaseConfig::postgres_host_ = "localhost";
 std::string DatabaseConfig::postgres_db_ = "postgres";
@@ -54,50 +49,6 @@ std::string DatabaseConfig::escapeConnectionParam(const std::string& param) {
   return escaped;
 }
 
-void DatabaseConfig::loadFromFile(const std::string& configPath) {
-  std::lock_guard<std::mutex> lock(configMutex_);
-  try {
-    std::ifstream configFile(configPath);
-    if (!configFile.is_open()) {
-      std::cerr << "[DatabaseConfig] Could not open config file '" << configPath
-                << "', using defaults or environment variables\n";
-      loadFromEnvUnlocked();
-      return;
-    }
-    json config;
-    configFile >> config;
-    if (config.contains("database") && config["database"].contains("postgres")) {
-      auto pgConfig = config["database"]["postgres"];
-      if (pgConfig.contains("host")) {
-        std::string host = pgConfig["host"].get<std::string>();
-        if (!host.empty()) postgres_host_ = host;
-      }
-      if (pgConfig.contains("port")) {
-        std::string port = pgConfig["port"].get<std::string>();
-        if (!validateAndSetPort(port, postgres_port_) && !port.empty()) {
-          std::cerr << "[DatabaseConfig] Invalid port: " << port << ", using 5432\n";
-        }
-      }
-      if (pgConfig.contains("database")) {
-        std::string db = pgConfig["database"].get<std::string>();
-        if (!db.empty()) postgres_db_ = db;
-      }
-      if (pgConfig.contains("user")) {
-        std::string user = pgConfig["user"].get<std::string>();
-        if (!user.empty()) postgres_user_ = user;
-      }
-      if (pgConfig.contains("password")) {
-        postgres_password_ = pgConfig["password"].get<std::string>();
-      }
-    }
-    initialized_ = true;
-  } catch (const std::exception& e) {
-    std::cerr << "[DatabaseConfig] Error loading config: " << e.what()
-              << ", falling back to environment\n";
-    loadFromEnvUnlocked();
-  }
-}
-
 void DatabaseConfig::loadFromEnvUnlocked() {
   const char* host = std::getenv("POSTGRES_HOST");
   const char* port = std::getenv("POSTGRES_PORT");
@@ -107,9 +58,7 @@ void DatabaseConfig::loadFromEnvUnlocked() {
   if (host && strlen(host) > 0) postgres_host_ = host;
   if (port && strlen(port) > 0) {
     std::string portStr(port);
-    if (!validateAndSetPort(portStr, postgres_port_)) {
-      std::cerr << "[DatabaseConfig] Invalid port: " << portStr << ", using 5432\n";
-    }
+    validateAndSetPort(portStr, postgres_port_);
   }
   if (db && strlen(db) > 0) postgres_db_ = db;
   if (user && strlen(user) > 0) postgres_user_ = user;

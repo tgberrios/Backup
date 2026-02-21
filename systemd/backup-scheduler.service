@@ -8,9 +8,10 @@
 #   sudo systemctl start backup-scheduler
 #
 # Prerequisites:
-#   - config.json in WorkingDirectory with database.postgres (or set env)
-#   - PostgreSQL schema: run schema/init_iks_schema.sql on that DB (schema iks)
-#   - Binary: set ExecStart path to your Backup binary (e.g. /usr/local/bin/Backup)
+#   - PostgreSQL with schema iks (run schema/init_iks_schema.sql or start the UI once).
+#   - Backup binary at ExecStart path (e.g. /usr/local/bin/Backup).
+#   - Configuration via environment only: set POSTGRES_* (or put backup.env in WorkingDirectory).
+#   - Binary reads backup.env / .env from WorkingDirectory; or set Environment= below.
 
 [Unit]
 Description=Backup scheduler (cron-style backup runner)
@@ -19,13 +20,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Use the path where the Backup binary is installed
 ExecStart=/usr/local/bin/Backup backup schedule
-# Directory that contains config.json (or set POSTGRES_* env below)
 WorkingDirectory=/etc/backup
-# Optional: use a dedicated config file
-# Environment=BACKUP_CONFIG=/etc/backup/config.json
-# Or set Postgres connection via environment
+# Set PostgreSQL connection (or use backup.env in WorkingDirectory)
 # Environment=POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_DB=postgres POSTGRES_USER=backup POSTGRES_PASSWORD=secret
 
 Restart=on-failure

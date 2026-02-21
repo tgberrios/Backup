@@ -18,7 +18,6 @@ private:
   static void loadFromEnvUnlocked();
 
 public:
-  static void loadFromFile(const std::string& configPath = "config.json");
   static void loadFromEnv();
 
   static std::string getPostgresHost() {
