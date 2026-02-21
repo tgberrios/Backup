@@ -1,7 +1,8 @@
 -- =============================================================================
--- IKS Backups – Schema PostgreSQL para control log, backups y backup_history.
+-- IKS Backups – Schema PostgreSQL (schema name: iks).
+-- Tablas: iks.backup_control_log, iks.backups, iks.backup_history.
 -- Marca: IKS (https://iks-enterprise-5sjib5zd4-tomy-gustavo-berrios-berrios-projects.vercel.app/)
--- Todas las columnas definidas y documentadas. Ejecutar una vez (idempotente).
+-- Ejecutar una vez (idempotente).
 -- =============================================================================
 
 CREATE SCHEMA IF NOT EXISTS iks;

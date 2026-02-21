@@ -4,10 +4,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = path.resolve(__dirname, "..", "..", "..", "schema", "init_backup_metadata.sql");
+const SCHEMA_PATH = path.resolve(__dirname, "..", "..", "..", "schema", "init_iks_schema.sql");
 
 /**
- * Ensures iks.backups and iks.backup_history exist. If not, runs schema/init_backup_metadata.sql.
+ * Ensures schema iks exists (iks.backups, iks.backup_history). If not, runs schema/init_iks_schema.sql.
  * Call once at server startup so the UI works without a manual psql step.
  */
 export async function ensureSchema() {
@@ -26,11 +26,6 @@ export async function ensureSchema() {
   }
 
   if (!fs.existsSync(SCHEMA_PATH)) {
-    console.warn(
-      "[Backup UI] Schema file not found:",
-      SCHEMA_PATH,
-      "- create iks.backups and iks.backup_history manually."
-    );
     return;
   }
 
@@ -54,9 +49,7 @@ export async function ensureSchema() {
     for (const stmt of statements) {
       await client2.query(stmt + ";");
     }
-    console.log("[Backup UI] Schema iks initialized (iks.backups, iks.backup_history).");
   } catch (err) {
-    console.error("[Backup UI] Failed to init schema:", err.message);
     throw err;
   } finally {
     client2.release();

@@ -1,3 +1,4 @@
+import "./load-env.js"; // Must run first so POSTGRES_* are set before database.service.js creates the pool
 import express from "express";
 import cors from "cors";
 import path from "path";
@@ -7,17 +8,6 @@ import connectionsRoutes from "./routes/connections.routes.js";
 import { ensureSchema } from "./services/init-schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load env from project root (backup.env or .env)
-const backupEnvPath = path.resolve(__dirname, "..", "..", "backup.env");
-const dotenvPath = path.resolve(__dirname, "..", "..", ".env");
-const fs = await import("fs");
-const { config } = await import("dotenv");
-if (fs.existsSync(backupEnvPath)) {
-  config({ path: backupEnvPath });
-} else if (fs.existsSync(dotenvPath)) {
-  config({ path: dotenvPath });
-}
 
 const app = express();
 const PORT = process.env.BACKUP_UI_PORT || 3100;
@@ -40,10 +30,8 @@ if (existsSync(frontendDist)) {
 (async () => {
   try {
     await ensureSchema();
-  } catch (err) {
-    console.error("Startup: could not ensure schema:", err.message);
+  } catch (_err) {
+    // Schema init failed; continue without logging
   }
-  app.listen(PORT, () => {
-    console.log(`IKS Backups server running at http://localhost:${PORT}`);
-  });
+  app.listen(PORT);
 })();

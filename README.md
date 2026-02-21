@@ -111,7 +111,7 @@ Output is JSON to stdout (success, file_path, file_size, duration_seconds, error
 1. **PostgreSQL** must be configured with the `POSTGRES_*` variables (see Configuration). The `iks` schema and tables are created automatically when the UI starts, or you can run manually:
 
    ```bash
-   psql -h localhost -U backup -d postgres -f schema/init_backup_metadata.sql
+   psql -h localhost -U backup -d postgres -f schema/init_iks_schema.sql
    ```
 
 2. **Register a scheduled backup:** from the Web UI (create a backup and enable “Enable scheduled backup” with a cron expression, e.g. `0 2 * * *` for daily at 02:00) or by inserting a row into `iks.backups` with `is_scheduled = true` and a valid `cron_schedule`.
@@ -133,11 +133,29 @@ Output is JSON to stdout (success, file_path, file_size, duration_seconds, error
 
 The schema name is **iks**. Main tables:
 
-- **iks.backup_control_log** – Control log for backup operations (date, database, status, file path, size, execution time, error message).
-- **iks.backups** – One row per backup job (name, engine, connection string, database, type, file path, status, cron, is_scheduled, next_run_at, last_run_at, run_count, etc.).
-- **iks.backup_history** – One row per run (backup_id, status, started_at, completed_at, duration_seconds, file_path, file_size, triggered_by, error_message).
+- **iks.backups** – One row per backup job. **The list you see in the Web UI comes from this table.** Columns: backup_name, db_engine, database_name, backup_type, status, file_path, created_at, cron_schedule, is_scheduled, etc.
+- **iks.backup_history** – One row per run (each time a backup runs). Links to iks.backups via backup_id; stores status, started_at, completed_at, file_path, file_size, error_message, triggered_by.
+- **iks.backup_control_log** – Control log table (defined in schema; not currently written by the UI or scheduler; may be empty).
 
-Full DDL is in `schema/init_backup_metadata.sql` (creates the `iks` schema and tables with indexes and comments).
+To see the same data as the UI in the database you **must use the same PostgreSQL** as in `backup.env` (same host, port, database name). If you query a different DB, tables will look empty even though the UI shows backups.
+
+**Query with psql** (use the same host, port, and database as in `backup.env`):
+
+```bash
+psql -h localhost -p 5432 -d postgres -c 'SELECT backup_id, backup_name, status, created_at FROM iks.backups ORDER BY created_at DESC;'
+```
+
+Or in SQL:
+
+```sql
+SELECT backup_id, backup_name, db_engine, database_name, status, file_path, created_at
+FROM iks.backups
+ORDER BY created_at DESC;
+```
+
+**Where backup files are stored:** Each job’s file path is in `iks.backups.file_path`. By default files are under the project’s **`storage/backups/`** directory (or `BACKUP_STORAGE_DIR` if set in env). If a run failed, the file may be missing or incomplete.
+
+Full DDL is in `schema/init_iks_schema.sql` (creates the `iks` schema and tables with indexes and comments).
 
 ---
 

@@ -9,7 +9,7 @@
 #
 # Prerequisites:
 #   - config.json in WorkingDirectory with database.postgres (or set env)
-#   - PostgreSQL schema: run schema/init_backup_metadata.sql on that DB
+#   - PostgreSQL schema: run schema/init_iks_schema.sql on that DB (schema iks)
 #   - Binary: set ExecStart path to your Backup binary (e.g. /usr/local/bin/Backup)
 
 [Unit]

@@ -19,9 +19,71 @@ if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
 }
 
+/** Parse postgresql://user:password@host:port/database into { host, port, user, password, database }. */
+function parsePgConnectionString(connection_string) {
+  const u = new URL(connection_string.replace(/^postgresql:\/\//i, "postgres://"));
+  return {
+    host: u.hostname || "localhost",
+    port: u.port ? parseInt(u.port, 10) : 5432,
+    user: decodeURIComponent(u.username || "postgres"),
+    password: decodeURIComponent(u.password || ""),
+    database: u.pathname ? decodeURIComponent(u.pathname.slice(1)) : "postgres",
+  };
+}
+
+/** Run pg_dump from Node (avoids C++ binary; can avoid double-free in some environments). */
+function runPgDumpFromNode(conn, database_name, backup_type, filePath) {
+  return new Promise((resolve) => {
+    const args = ["-h", conn.host, "-p", String(conn.port), "-U", conn.user, "-d", database_name, "-f", filePath, "-F", "c"];
+    if (backup_type === "structure") args.push("--schema-only");
+    else if (backup_type === "data") args.push("--data-only");
+    const env = { ...process.env, PGPASSWORD: conn.password };
+    const proc = spawn("pg_dump", args, { env });
+    let stderr = "";
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("close", (code, signal) => {
+      if (code === 0 && fs.existsSync(filePath)) {
+        try {
+          const fileSize = fs.statSync(filePath).size;
+          resolve({ success: true, file_size: fileSize, stderr });
+        } catch {
+          resolve({ success: false, stderr: stderr || "Could not stat backup file" });
+        }
+      } else {
+        resolve({ success: false, stderr: stderr || (signal ? `Process killed (${signal})` : `Exit code ${code}`) });
+      }
+    });
+  });
+}
+
 function sanitizeError(err, fallback, _hideInProduction) {
   if (err?.message) return err.message;
   return fallback || "Unknown error";
+}
+
+const MAX_ERROR_MESSAGE_LENGTH = 1000;
+
+/** Normalize backup process stderr so the UI shows a clear message instead of low-level noise (e.g. double free after collation warning). */
+function normalizeBackupProcessError(stderrOrMessage) {
+  const raw = (stderrOrMessage || "").trim();
+  if (!raw) return "Backup process failed.";
+
+  if (/collation version mismatch/i.test(raw)) {
+    const dbMatch = raw.match(/database\s+"([^"]+)"/i);
+    const dbName = dbMatch ? dbMatch[1] : "YourDatabase";
+    return `Database collation version mismatch (${dbName}). On the source PostgreSQL server run: ALTER DATABASE "${dbName}" REFRESH COLLATION VERSION; Then retry the backup.`;
+  }
+  if (/free\(\): double free|double free detected/i.test(raw)) {
+    const withoutFree = raw.replace(/\n?free\(\): double free detected in tcache \d+\s*/gi, "").trim();
+    if (withoutFree.length > 0) return normalizeBackupProcessError(withoutFree);
+    // No other content: show raw so user sees real error (e.g. after fixing collation, another failure)
+    return raw.length > MAX_ERROR_MESSAGE_LENGTH
+      ? raw.slice(0, MAX_ERROR_MESSAGE_LENGTH) + "..."
+      : raw;
+  }
+  return raw.length > MAX_ERROR_MESSAGE_LENGTH
+    ? raw.slice(0, MAX_ERROR_MESSAGE_LENGTH) + "..."
+    : raw;
 }
 
 function matchesCronField(field, currentValue) {
@@ -172,6 +234,7 @@ router.post("/create", async (req, res) => {
     const backupId = backupRecord.rows[0].backup_id;
 
     (async () => {
+      const historyIdRef = { current: null };
       try {
         const historyRecord = await pool.query(
           `INSERT INTO iks.backup_history 
@@ -180,6 +243,36 @@ router.post("/create", async (req, res) => {
            RETURNING id`,
           [backupId, backup_name, "in_progress", "manual"]
         );
+        historyIdRef.current = historyRecord.rows[0].id;
+        const startTime = Date.now();
+
+        let resultPath = filePath;
+        let fileSize = 0;
+        let durationSeconds = 0;
+
+        if (db_engine === "PostgreSQL") {
+          const conn = parsePgConnectionString(connection_string);
+          const pgResult = await runPgDumpFromNode(conn, database_name, backup_type, filePath);
+          durationSeconds = Math.round((Date.now() - startTime) / 1000);
+          if (pgResult.success) {
+            fileSize = pgResult.file_size;
+            await pool.query(
+              `UPDATE iks.backups 
+               SET status = 'completed', file_size = $1, completed_at = NOW()
+               WHERE backup_id = $2`,
+              [fileSize, backupId]
+            );
+            await pool.query(
+              `UPDATE iks.backup_history 
+               SET status = 'completed', completed_at = NOW(), 
+                   duration_seconds = $1, file_path = $2, file_size = $3
+               WHERE id = $4`,
+              [durationSeconds, resultPath, fileSize, historyIdRef.current]
+            );
+            return;
+          }
+          throw new Error(normalizeBackupProcessError(pgResult.stderr));
+        }
 
         const backupConfig = {
           backup_name,
@@ -189,27 +282,17 @@ router.post("/create", async (req, res) => {
           backup_type,
           file_path: filePath,
         };
-
         const configPath = path.join(backupsDir, `backup_config_${backupId}.json`);
         await fs.promises.writeFile(configPath, JSON.stringify(backupConfig, null, 2));
 
         const backupProcess = spawn(BackupBinaryPath, ["backup", "create", configPath], {
           cwd: BACKUP_PROJECT_ROOT,
         });
-
         let stdout = "";
         let stderr = "";
-
-        backupProcess.stdout.on("data", (data) => {
-          stdout += data.toString();
-        });
-        backupProcess.stderr.on("data", (data) => {
-          stderr += data.toString();
-        });
-
-        const exitCode = await new Promise((resolve) => {
-          backupProcess.on("close", resolve);
-        });
+        backupProcess.stdout.on("data", (data) => { stdout += data.toString(); });
+        backupProcess.stderr.on("data", (data) => { stderr += data.toString(); });
+        const exitCode = await new Promise((resolve) => backupProcess.on("close", resolve));
 
         try {
           await fs.promises.unlink(configPath);
@@ -218,17 +301,16 @@ router.post("/create", async (req, res) => {
         }
 
         if (exitCode !== 0) {
-          throw new Error(`Backup process failed: ${stderr || stdout}`);
+          throw new Error(normalizeBackupProcessError(stderr || stdout));
         }
 
         const result = JSON.parse(stdout);
         if (!result.success) {
           throw new Error(result.error_message || "Backup failed");
         }
-
-        const resultPath = result.file_path || filePath;
-        const fileSize = result.file_size || 0;
-        const durationSeconds = result.duration_seconds || 0;
+        resultPath = result.file_path || filePath;
+        fileSize = result.file_size || 0;
+        durationSeconds = Math.round((Date.now() - startTime) / 1000);
 
         await pool.query(
           `UPDATE iks.backups 
@@ -236,16 +318,14 @@ router.post("/create", async (req, res) => {
            WHERE backup_id = $2`,
           [fileSize, backupId]
         );
-
         await pool.query(
           `UPDATE iks.backup_history 
            SET status = 'completed', completed_at = NOW(), 
                duration_seconds = $1, file_path = $2, file_size = $3
            WHERE id = $4`,
-          [durationSeconds, resultPath, fileSize, historyRecord.rows[0].id]
+          [durationSeconds, resultPath, fileSize, historyIdRef.current]
         );
       } catch (err) {
-        console.error("Error creating backup:", err);
         await pool.query(
           `UPDATE iks.backups 
            SET status = 'failed', error_message = $1, completed_at = NOW()
@@ -255,8 +335,12 @@ router.post("/create", async (req, res) => {
         await pool.query(
           `UPDATE iks.backup_history 
            SET status = 'failed', completed_at = NOW(), error_message = $1
-           WHERE backup_id = $2 AND status = 'in_progress'
-           ORDER BY started_at DESC LIMIT 1`,
+           WHERE id = (
+             SELECT id FROM iks.backup_history 
+             WHERE backup_id = $2 AND status = 'in_progress'
+             ORDER BY started_at DESC 
+             LIMIT 1
+           )`,
           [err.message, backupId]
         );
       }
@@ -268,7 +352,6 @@ router.post("/create", async (req, res) => {
       status: "in_progress",
     });
   } catch (err) {
-    console.error("Error creating backup:", err);
     res.status(500).json({
       error: "Error creating backup",
       details: sanitizeError(err, "Server error", false),
@@ -342,7 +425,6 @@ router.get("", async (req, res) => {
       limit: parseInt(limit),
     });
   } catch (err) {
-    console.error("Error fetching backups:", err);
     res.status(500).json({
       error: "Error fetching backups",
       details: sanitizeError(err, "Server error", false),
@@ -362,7 +444,6 @@ router.get("/:id", async (req, res) => {
     }
     res.json(result.rows[0]);
   } catch (err) {
-    console.error("Error fetching backup:", err);
     res.status(500).json({
       error: "Error fetching backup",
       details: sanitizeError(err, "Server error", false),
@@ -383,7 +464,6 @@ router.get("/:id/history", async (req, res) => {
     );
     res.json({ history: result.rows });
   } catch (err) {
-    console.error("Error fetching backup history:", err);
     res.status(500).json({
       error: "Error fetching history",
       details: sanitizeError(err, "Server error", false),
@@ -424,7 +504,6 @@ router.put("/:id/schedule", async (req, res) => {
       next_run_at: nextRunAt,
     });
   } catch (err) {
-    console.error("Error updating schedule:", err);
     res.status(500).json({
       error: "Error updating schedule",
       details: sanitizeError(err, "Server error", false),
@@ -455,7 +534,6 @@ router.post("/:id/enable-schedule", async (req, res) => {
     );
     res.json({ message: "Schedule enabled", next_run_at: nextRunAt });
   } catch (err) {
-    console.error("Error enabling schedule:", err);
     res.status(500).json({
       error: "Error enabling schedule",
       details: sanitizeError(err, "Server error", false),
@@ -472,7 +550,6 @@ router.post("/:id/disable-schedule", async (req, res) => {
     );
     res.json({ message: "Schedule disabled" });
   } catch (err) {
-    console.error("Error disabling schedule:", err);
     res.status(500).json({
       error: "Error disabling schedule",
       details: sanitizeError(err, "Server error", false),
@@ -495,7 +572,6 @@ router.post("/:id/restore", async (req, res) => {
       backup_id: backupId,
     });
   } catch (err) {
-    console.error("Error restoring backup:", err);
     res.status(500).json({
       error: "Error restoring backup",
       details: sanitizeError(err, "Server error", false),
@@ -520,7 +596,6 @@ router.delete("/:id", async (req, res) => {
     await pool.query("DELETE FROM iks.backups WHERE backup_id = $1", [backupId]);
     res.json({ message: "Backup deleted" });
   } catch (err) {
-    console.error("Error deleting backup:", err);
     res.status(500).json({
       error: "Error deleting backup",
       details: sanitizeError(err, "Server error", false),

@@ -55,7 +55,7 @@ export const BackupManager = () => {
     selected_databases: [],
     backup_type: "full",
     cron_schedule: "",
-    is_scheduled: false,
+    is_scheduled: true,
   });
   const [backupHistory, setBackupHistory] = useState<
     { id: number; started_at: string; status: string; duration_seconds?: number; file_size?: number; triggered_by?: string; error_message?: string }[]
@@ -106,8 +106,6 @@ export const BackupManager = () => {
 
   useEffect(() => {
     fetchBackups();
-    const interval = setInterval(fetchBackups, 5000);
-    return () => clearInterval(interval);
   }, [fetchBackups]);
 
   const handleTestConnection = useCallback(async () => {
@@ -569,7 +567,7 @@ export const BackupManager = () => {
                     selected_databases: [],
                     backup_type: "full",
                     cron_schedule: "",
-                    is_scheduled: false,
+                    is_scheduled: true,
                   });
                   setAvailableDatabases([]);
                   setConnectionTested(false);
